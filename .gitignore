@@ -1,0 +1,6 @@
+.DS_Store
+*.env
+.env*.local
+.claude/
+supabase/.temp/
+node_modules/

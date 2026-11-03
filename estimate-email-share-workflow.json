@@ -1,0 +1,182 @@
+{
+  "name": "Estimate Share - Email",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "estimate-email-share",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$json.body.pdfUrl}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "download-pdf",
+      "name": "Download PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 300],
+      "notes": "If 'Response Format: File' doesn't carry over on import, set it manually in the node's Options tab so the PDF arrives as binary data."
+    },
+    {
+      "parameters": {
+        "fromEmail": "REPLACE_WITH_SENDER_EMAIL@yourbusiness.com",
+        "toEmail": "={{$('Webhook').item.json.body.recipientEmail}}",
+        "subject": "Your Estimate is Ready",
+        "text": "=Hi {{$('Webhook').item.json.body.recipientName}},\n\nPlease find your estimate attached. Let us know if you have any questions.\n\nThanks!",
+        "attachments": "data"
+      },
+      "id": "send-email",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [640, 300],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Business SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "estimate_shares",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "estimate_id", "fieldValue": "={{$('Webhook').item.json.body.estimateId}}" },
+            { "fieldId": "channel", "fieldValue": "email" },
+            { "fieldId": "recipient", "fieldValue": "={{$('Webhook').item.json.body.recipientEmail}}" }
+          ]
+        }
+      },
+      "id": "log-share",
+      "name": "Log Share",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [860, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Supabase Project"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "estimates",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{$('Webhook').item.json.body.estimateId}}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "status", "fieldValue": "sent" }
+          ]
+        }
+      },
+      "id": "update-estimate-status",
+      "name": "Update Estimate Status",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1080, 300],
+      "notes": "Filter/update param names vary slightly by n8n version — check this node renders correctly after import.",
+      "credentials": {
+        "supabaseApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Supabase Project"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{$('Webhook').item.json.body.leadId}}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "status", "fieldValue": "estimate_sent" }
+          ]
+        }
+      },
+      "id": "update-lead-status",
+      "name": "Update Lead Status",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1300, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Supabase Project"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true } }}"
+      },
+      "id": "respond-to-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1520, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Download PDF", "type": "main", "index": 0 }]]
+    },
+    "Download PDF": {
+      "main": [[{ "node": "Send Email", "type": "main", "index": 0 }]]
+    },
+    "Send Email": {
+      "main": [[{ "node": "Log Share", "type": "main", "index": 0 }]]
+    },
+    "Log Share": {
+      "main": [[{ "node": "Update Estimate Status", "type": "main", "index": 0 }]]
+    },
+    "Update Estimate Status": {
+      "main": [[{ "node": "Update Lead Status", "type": "main", "index": 0 }]]
+    },
+    "Update Lead Status": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

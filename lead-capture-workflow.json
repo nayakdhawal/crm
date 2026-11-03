@@ -1,0 +1,319 @@
+{
+  "name": "Lead Capture - Email + AI Service Extraction",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "readStatus": "unread"
+        }
+      },
+      "id": "gmail-trigger",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Business Inbox (Gmail)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize whatever shape the Gmail Trigger gives us into clean fields.\n// Adjust field paths below if your n8n Gmail Trigger version returns a different shape\n// (check the trigger's output once before relying on this).\nconst email = $input.item.json;\n\nconst fromHeader = email.from?.value?.[0] || {};\n\nreturn {\n  json: {\n    sender_name: fromHeader.name || email.from?.text || 'Unknown',\n    sender_email: fromHeader.address || email.from?.text || '',\n    subject: email.subject || '',\n    raw_email_body: email.text || email.snippet || ''\n  }\n};"
+      },
+      "id": "format-email-data",
+      "name": "Format Email Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "source",
+              "fieldValue": "email"
+            },
+            {
+              "fieldId": "sender_name",
+              "fieldValue": "={{$json.sender_name}}"
+            },
+            {
+              "fieldId": "sender_email",
+              "fieldValue": "={{$json.sender_email}}"
+            },
+            {
+              "fieldId": "raw_email_body",
+              "fieldValue": "={{$json.raw_email_body}}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "new"
+            }
+          ]
+        }
+      },
+      "id": "insert-lead",
+      "name": "Insert Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        640,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Supabase Project"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "services_master",
+        "returnAll": true,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "active",
+              "condition": "eq",
+              "keyValue": "true"
+            }
+          ]
+        }
+      },
+      "id": "get-services-master",
+      "name": "Get Services Master",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        860,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Supabase Project"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine the inserted lead (from the \"Insert Lead\" node) with the current\n// services list (this node's input) to build the extraction prompt.\nconst lead = $('Insert Lead').first().json;\nconst services = $input.all().map(item => item.json);\n\nconst serviceList = services\n  .map(s => `- ${s.name} (${s.pricing_type}, rate: ${s.rate} ${s.unit_label || ''})`)\n  .join('\\n');\n\nconst systemPrompt = `You are extracting requested services from a customer inquiry email for a home renovation / interiors business.\n\nAvailable services:\n${serviceList}\n\nRespond ONLY with a JSON array (no prose, no markdown fences) in this exact format:\n[{\"service_name\": \"<must exactly match one of the names above>\", \"quantity\": <number or null>, \"length\": <number or null>, \"width\": <number or null>, \"notes\": \"<short context>\"}]\n\nIf a service's pricing is per_sqft or per_sqinch, fill length and width when dimensions are mentioned. If it is per_rft (running feet), fill length only. For flat services, use quantity. If no services are clearly mentioned, respond with [].`;\n\nreturn {\n  json: {\n    lead_id: lead.id,\n    services_raw: services,\n    anthropic_body: {\n      model: 'claude-sonnet-4-6',\n      max_tokens: 1000,\n      system: systemPrompt,\n      messages: [\n        { role: 'user', content: lead.raw_email_body || '' }\n      ]\n    }\n  }\n};"
+      },
+      "id": "build-ai-prompt",
+      "name": "Build AI Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "REPLACE_WITH_ANTHROPIC_API_KEY_OR_CREDENTIAL"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.anthropic_body}}"
+      },
+      "id": "claude-extract-services",
+      "name": "Claude Extract Services",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        300
+      ],
+      "notes": "For production, move the x-api-key into an n8n credential (Header Auth) instead of a raw value in the node."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Claude's reply, match each extracted service name to a real service,\n// and keep the order Claude returned (stored as position).\nconst response = $input.item.json;\nconst leadId = $('Build AI Prompt').first().json.lead_id;\nconst services = $('Build AI Prompt').first().json.services_raw;\n\nlet extracted = [];\ntry {\n  const text = response.content?.[0]?.text || '[]';\n  const cleaned = text.replace(/```json|```/g, '').trim();\n  extracted = JSON.parse(cleaned);\n} catch (e) {\n  extracted = [];\n}\n\nconst matched = extracted\n  .map(item => ({\n    item,\n    match: services.find(s => s.name.toLowerCase() === (item.service_name || '').toLowerCase()),\n  }))\n  .filter(x => x.match);\n\nreturn matched.map((x, index) => ({\n  json: {\n    lead_id: leadId,\n    service_id: x.match.id,\n    quantity: x.item.quantity ?? 1,\n    length: x.item.length ?? null,\n    width: x.item.width ?? null,\n    notes: x.item.notes || '',\n    position: index,\n  },\n}));\n"
+      },
+      "id": "parse-ai-response",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "lead_services",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{$json.lead_id}}"
+            },
+            {
+              "fieldId": "service_id",
+              "fieldValue": "={{$json.service_id}}"
+            },
+            {
+              "fieldId": "quantity",
+              "fieldValue": "={{$json.quantity}}"
+            },
+            {
+              "fieldId": "length",
+              "fieldValue": "={{$json.length}}"
+            },
+            {
+              "fieldId": "width",
+              "fieldValue": "={{$json.width}}"
+            },
+            {
+              "fieldId": "notes",
+              "fieldValue": "={{$json.notes}}"
+            },
+            {
+              "fieldId": "position",
+              "fieldValue": "={{$json.position}}"
+            }
+          ]
+        }
+      },
+      "id": "insert-lead-services",
+      "name": "Insert Lead Services",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1740,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Supabase Project"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format Email Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Email Data": {
+      "main": [
+        [
+          {
+            "node": "Insert Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Lead": {
+      "main": [
+        [
+          {
+            "node": "Get Services Master",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Services Master": {
+      "main": [
+        [
+          {
+            "node": "Build AI Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "Claude Extract Services",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Extract Services": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Insert Lead Services",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
